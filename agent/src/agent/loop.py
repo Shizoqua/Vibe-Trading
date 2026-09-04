@@ -937,6 +937,11 @@ class AgentLoop:
         self._event_callback = event_callback
         self.max_iterations = max_iterations
         self._called_ok: set[str] = set()
+        # Successful non-repeatable results live outside the mutable prompt
+        # transcript so compaction cannot make the duplicate guard point at
+        # data the model can no longer see. Keys include canonical arguments
+        # so a later call for different data never receives a stale payload.
+        self._called_ok_results: dict[tuple[str, str], str] = {}
         self._cancel_event = threading.Event()
         self._previous_summary: str = ""
         self._persistent_memory = persistent_memory
@@ -1042,6 +1047,7 @@ class AgentLoop:
         else:
             self._has_run = True
         self._called_ok = set()
+        self._called_ok_results = {}
         self._previous_summary = ""
         self._released_fallback = False
         self._released_fallback_reason = None
@@ -1930,13 +1936,7 @@ class AgentLoop:
 
             tool_def = self.registry.get(tc.name)
             is_repeatable = tool_def.repeatable if tool_def else False
-            if tc.name in self._called_ok and not is_repeatable:
-                logger.warning(f"Blocked duplicate call: {tc.name} (already succeeded)")
-                skip_msg = json.dumps({"skipped": True, "reason": f"{tc.name} already completed successfully. Use the previous result."})
-                messages.append(context.format_tool_result(tc.id, tc.name, skip_msg))
-                trace.write({"type": "tool_skipped", "iter": iteration, "tool": tc.name})
-                react_trace.append({"type": "tool_skipped", "tool": tc.name})
-                continue
+            duplicate_nonrepeatable = tc.name in self._called_ok and not is_repeatable
 
             if self._grounding is not None:
                 authorization = self._grounding.authorize_tool_call(
@@ -1957,6 +1957,57 @@ class AgentLoop:
                         )
                     )
                     continue
+
+            if duplicate_nonrepeatable:
+                cache_key = self._identical_call_key(tc.name, tc.arguments)
+                cached = (
+                    self._called_ok_results.get(cache_key)
+                    if cache_key is not None
+                    else None
+                )
+                if cached is not None:
+                    replay = truncate_tool_result(cached)
+                    messages.append(context.format_tool_result(tc.id, tc.name, replay))
+                    trace.write({
+                        "type": "tool_result_cached",
+                        "iter": iteration,
+                        "tool": tc.name,
+                        "call_id": tc.id,
+                    })
+                    react_trace.append({"type": "tool_result_cached", "tool": tc.name})
+                    preview = redact_tool_result(cached)[:200]
+                    self._emit(
+                        "tool_result",
+                        {
+                            "tool": tc.name,
+                            "status": "ok",
+                            "elapsed_ms": 0,
+                            "preview": preview,
+                            "call_id": tc.id,
+                            "cached": True,
+                        },
+                    )
+                else:
+                    logger.warning(
+                        f"Blocked duplicate call: {tc.name} (already succeeded)"
+                    )
+                    skip_msg = json.dumps(
+                        {
+                            "skipped": True,
+                            "reason": (
+                                f"{tc.name} already completed successfully. "
+                                "Use the previous result."
+                            ),
+                        }
+                    )
+                    messages.append(
+                        context.format_tool_result(tc.id, tc.name, skip_msg)
+                    )
+                    trace.write(
+                        {"type": "tool_skipped", "iter": iteration, "tool": tc.name}
+                    )
+                    react_trace.append({"type": "tool_skipped", "tool": tc.name})
+                continue
 
             # Deterministic tools (e.g. financial_rigor calc) return the same
             # result for the same args. Checked AFTER authorization above so a
@@ -2543,6 +2594,10 @@ class AgentLoop:
         success = _is_tool_success(result)
         if success:
             self._called_ok.add(tc.name)
+            if update_memory:
+                cache_key = self._identical_call_key(tc.name, tc.arguments)
+                if cache_key is not None:
+                    self._called_ok_results[cache_key] = result
             if tc.name == "backtest":
                 try:
                     _archive_backtest_result(result, self.memory.run_dir)
