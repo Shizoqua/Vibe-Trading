@@ -38,6 +38,9 @@ import numpy as np
 import pandas as pd
 from numpy.typing import ArrayLike
 
+#: Public surface. `quantlib_call` dispatches on ``__all__`` alone, so a module
+#: without it is unreachable from Web / API / MCP even when the tool allowlists
+#: it — which is exactly what happened to this module until 0.1.13.
 __all__ = [
     "DEFAULT_DELAY_BARS",
     "DEFAULT_LINEAR_IMPACT_COEFF",
@@ -49,14 +52,38 @@ __all__ = [
     "sqrt_impact",
 ]
 
+#: Default fixed slippage in basis points (1bp = 0.01%).
 DEFAULT_SLIPPAGE_BPS = 5.0
+
+#: Default linear-impact coefficient; 0.05-0.2 is the usual calibrated range.
 DEFAULT_LINEAR_IMPACT_COEFF = 0.1
+
+#: Default square-root impact elasticity; 0.3-0.8 is the usual calibrated range.
 DEFAULT_SQRT_IMPACT_ETA = 0.5
+
+#: Default execution lag in bars. 1 bar matches the China A-share T+1 rule.
 DEFAULT_DELAY_BARS = 1
+
+#: Basis points in one unit (100%).
 _BPS_PER_UNIT = 10_000.0
 
 
 def _check_order(price: ArrayLike, direction: int) -> np.ndarray:
+    """Validate the price and side shared by every price-impact model.
+
+    Args:
+        price: Reference price before impact; scalar or array-like.
+        direction: 1 to buy, -1 to sell.
+
+    Returns:
+        ``price`` as a float array (0-d for a scalar input).
+
+    Raises:
+        ValueError: If any ``price`` is not finite and strictly positive, or if
+            ``direction`` is anything other than 1 or -1. Direction multiplies
+            the impact, so a value such as 2 would silently double the modelled
+            cost.
+    """
     prices = np.asarray(price, dtype=float)
     if not np.all(np.isfinite(prices) & (prices > 0.0)):
         raise ValueError(f"price must be finite and strictly positive, got {price!r}")
@@ -66,6 +93,19 @@ def _check_order(price: ArrayLike, direction: int) -> np.ndarray:
 
 
 def _participation_rate(volume_traded: ArrayLike, adv: ArrayLike) -> np.ndarray:
+    """Return the order size as a fraction of average daily volume.
+
+    Args:
+        volume_traded: Order size, in the same unit as ``adv``.
+        adv: Average daily volume, strictly positive.
+
+    Returns:
+        ``volume_traded / adv``, broadcast over both arguments.
+
+    Raises:
+        ValueError: If any ``volume_traded`` is non-finite or negative, or any
+            ``adv`` is non-finite or not strictly positive.
+    """
     volumes = np.asarray(volume_traded, dtype=float)
     advs = np.asarray(adv, dtype=float)
     if not np.all(np.isfinite(volumes) & (volumes >= 0.0)):
@@ -76,6 +116,7 @@ def _participation_rate(volume_traded: ArrayLike, adv: ArrayLike) -> np.ndarray:
 
 
 def _fill(prices: np.ndarray, direction: int, impact: np.ndarray) -> float | np.ndarray:
+    """Apply a relative impact to a price and return the fill."""
     fill = prices * (1.0 + direction * impact)
     if not np.all(np.isfinite(fill) & (fill > 0.0)):
         raise ValueError("impact produces a non-finite or non-positive fill price")
@@ -83,6 +124,7 @@ def _fill(prices: np.ndarray, direction: int, impact: np.ndarray) -> float | np.
 
 
 def fixed_slippage(price: float, direction: int, bps: float = DEFAULT_SLIPPAGE_BPS) -> float:
+    """Apply a constant basis-point slippage to a fill price."""
     prices = _check_order(price, direction)
     rates = np.asarray(bps, dtype=float)
     if not np.all(np.isfinite(rates) & (rates >= 0.0)):
@@ -97,6 +139,7 @@ def linear_impact(
     adv: float,
     impact_coeff: float = DEFAULT_LINEAR_IMPACT_COEFF,
 ) -> float:
+    """Apply market impact proportional to the participation rate."""
     prices = _check_order(price, direction)
     coeffs = np.asarray(impact_coeff, dtype=float)
     if not np.all(np.isfinite(coeffs) & (coeffs >= 0.0)):
@@ -112,6 +155,7 @@ def sqrt_impact(
     volatility: float,
     eta: float = DEFAULT_SQRT_IMPACT_ETA,
 ) -> float:
+    """Apply square-root market impact."""
     prices = _check_order(price, direction)
     vols = np.asarray(volatility, dtype=float)
     etas = np.asarray(eta, dtype=float)
@@ -124,6 +168,7 @@ def sqrt_impact(
 
 
 def delayed_execution(signal_series: pd.Series, delay_bars: int = DEFAULT_DELAY_BARS) -> pd.Series:
+    """Shift a signal forward to model the lag between decision and fill."""
     if not isinstance(signal_series, pd.Series):
         raise TypeError(f"signal_series must be a pandas Series, got {type(signal_series).__name__}")
     if delay_bars < 0:
