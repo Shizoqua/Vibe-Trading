@@ -215,6 +215,28 @@ describe("ChannelSettings config panel", () => {
     expect(document.body.textContent).not.toContain("****abcd9");
   });
 
+  it("surfaces unsupported connection tests honestly", async () => {
+    apiMock.getChannelsConfig.mockResolvedValue(channelsConfig({
+      channels: {
+        dingtalk: dingtalkEntry({ supports_test: false }),
+      },
+    }));
+    apiMock.testChannel.mockResolvedValue({
+      ok: false,
+      code: "unsupported",
+      sdk_available: true,
+      tested_saved_config: true,
+    });
+    await renderExpanded();
+
+    const button = screen.getByRole("button", { name: "Test connection" });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+
+    await waitFor(() => expect(apiMock.testChannel).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("Unsupported")).toBeInTheDocument();
+  });
+
   it("tests the saved configuration with an empty body when the form is pristine", async () => {
     apiMock.testChannel.mockResolvedValue({
       ok: true,

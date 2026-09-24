@@ -301,7 +301,6 @@ export function ChannelConfigPanel({
   };
 
   const runTest = async () => {
-    if (!entry.supports_test) return;
     setTesting(true);
     setError(null);
     setErrorDetail(null);
@@ -575,7 +574,7 @@ export function ChannelConfigPanel({
           <button
             type="button"
             onClick={() => void runTest()}
-            disabled={!entry.supports_test || busy}
+            disabled={busy}
             className="inline-flex items-center justify-center gap-2 rounded-md border px-4 py-2 text-sm text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
           >
             {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlugZap className="h-4 w-4" />}
