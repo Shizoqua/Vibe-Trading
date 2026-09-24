@@ -1042,3 +1042,16 @@ class TestSpotGoldCandidateFilter:
         symbols = [c["symbol"] for c in data["candidates"]]
         assert "BTC-USD" in symbols
         assert "AAPL.US" in symbols
+
+
+def test_argentina_yahoo_candidate_keeps_market_identity() -> None:
+    quote = {
+        "symbol": "GGAL.BA",
+        "shortname": "Grupo Financiero Galicia",
+        "exchange": "BUE",
+        "quoteType": "EQUITY",
+    }
+    candidate = ss._yahoo_candidate(quote)
+    assert candidate is not None
+    assert candidate["symbol"] == "GGAL.BA"
+    assert candidate["market"] == "ar"

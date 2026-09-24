@@ -3393,3 +3393,11 @@ def test_crypto_pair_tables_match_the_resolver() -> None:
     # gold and forex are quoted in it too); grounding decides it by the base
     # whitelist instead, so it is the only permitted difference.
     assert set(g._CRYPTO_QUOTE_ASSETS) | {"USD"} == set(ss._CRYPTO_QUOTE_ASSETS)
+
+
+def test_argentina_symbol_is_seeded_with_market_identity(tmp_path: Path) -> None:
+    ledger = GroundingLedger(run_dir=tmp_path, user_message="Check GOOGL.BA price")
+
+    assert ledger.authorized_symbols == {"GOOGL.BA"}
+    assert ledger.identity["venue"] == "buenos_aires"
+    assert ledger.identity["currency"] == "ARS"
