@@ -152,6 +152,28 @@ def _derive_hints(name: str) -> list[FieldHint]:
     return hints
 
 
+def channel_config_surface(name: str) -> str:
+    """Return whether a channel has guided or generic Web config metadata."""
+    return "guided" if name in FIELD_HINTS else "generic"
+
+
+def file_configured_fields(name: str) -> list[str]:
+    """Return default-config keys the generic form cannot represent."""
+    if name in FIELD_HINTS:
+        return []
+    try:
+        config = load_channel_class(name).default_config()
+    except Exception:  # noqa: BLE001 - unavailable adapters expose no field detail
+        return []
+    if not isinstance(config, dict):
+        return []
+    return sorted(
+        key
+        for key, value in config.items()
+        if key not in _EXCLUDED_KEYS and isinstance(value, dict)
+    )
+
+
 def channel_field_hints(name: str) -> list[FieldHint]:
     """Return UI field metadata for one channel.
 

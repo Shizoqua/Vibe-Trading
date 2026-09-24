@@ -176,6 +176,8 @@ def test_get_masks_secrets_and_reports_writable(tmp_path: Path, monkeypatch) -> 
     assert entry["display_name"] == "DingTalk"
     assert entry["supports_test"] is True
     assert entry["sdk_available"] is DINGTALK_AVAILABLE
+    assert entry["config_surface"] == "guided"
+    assert entry["file_configured_fields"] == []
     assert entry["values"]["client_id"] == CLIENT_ID
     assert entry["values"]["enabled"] is False
     assert "client_secret" not in entry["values"]

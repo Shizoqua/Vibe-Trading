@@ -12,7 +12,9 @@ import pytest
 from src.channels import config_meta as _config_meta
 from src.channels.config_meta import (
     SECRET_KEY_RE,
+    channel_config_surface,
     channel_field_hints,
+    file_configured_fields,
     split_values_secrets,
 )
 from src.channels.registry import discover_channel_names, load_channel_class
@@ -170,6 +172,22 @@ def test_qq_field_hints_exact_snapshot() -> None:
         },
     ]
     assert "enabled" not in {hint["key"] for hint in hints}
+
+
+def test_config_surface_distinguishes_guided_from_generic() -> None:
+    assert channel_config_surface("dingtalk") == "guided"
+    assert channel_config_surface("qq") == "guided"
+    assert channel_config_surface("signal") == "generic"
+
+
+def test_file_configured_fields_reports_unrepresentable_defaults() -> None:
+    assert file_configured_fields("dingtalk") == []
+    config = _section_for("signal")
+    if config is None:
+        pytest.skip("signal adapter unloadable in this environment")
+    assert set(file_configured_fields("signal")) == {
+        key for key, value in config.items() if isinstance(value, dict)
+    }
 
 
 # --- (b) fallback derivation ------------------------------------------------- #

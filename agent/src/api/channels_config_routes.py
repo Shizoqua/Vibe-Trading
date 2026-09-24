@@ -32,7 +32,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from src.api import state as _state
 from src.channels import config as _channels_config
 from src.channels.bus.queue import MessageBus
-from src.channels.config_meta import SECRET_KEY_RE, channel_field_hints, split_values_secrets
+from src.channels.config_meta import (
+    SECRET_KEY_RE,
+    channel_config_surface,
+    channel_field_hints,
+    file_configured_fields,
+    split_values_secrets,
+)
 from src.channels.registry import (
     discover_channel_names,
     inspect_channel,
@@ -201,6 +207,8 @@ def _channel_entry(name: str, section: dict[str, Any], status_map: dict[str, Any
         "error": str(status_map.get("error") or ""),
         "supports_test": _supports_connection_test(name),
         "sdk_available": bool(status_map.get("sdk_available", available)),
+        "config_surface": channel_config_surface(name),
+        "file_configured_fields": file_configured_fields(name),
         "fields": channel_field_hints(name),
         "values": values,
         "secrets": secrets,
