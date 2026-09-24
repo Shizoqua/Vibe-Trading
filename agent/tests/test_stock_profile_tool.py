@@ -14,6 +14,12 @@ from src.tools import stock_profile_tool as sp
 
 def _sample_summary() -> dict:
     return {
+        "price": {
+            "symbol": "AAPL",
+            "exchangeName": "NasdaqGS",
+            "currency": "USD",
+            "financialCurrency": "USD",
+        },
         "defaultKeyStatistics": {
             "forwardPE": {"raw": 28.5, "fmt": "28.50"},
             "trailingEps": {"raw": 6.13},
@@ -95,6 +101,12 @@ class TestStockProfileSuccess:
         assert payload["source"] == "yahoo"
         data = payload["data"]
         assert data["ticker"] == "AAPL.US"
+        assert data["listing"] == {
+            "symbol": "AAPL",
+            "exchange": "NasdaqGS",
+            "quote_currency": "USD",
+            "financial_currency": "USD",
+        }
         assert set(data["sections"]) == set(sp._ALL_SECTIONS)
 
         # raw cells are unwrapped to scalars.
@@ -123,7 +135,8 @@ class TestStockProfileSuccess:
         requested_modules = args[1]
         assert "defaultKeyStatistics" in requested_modules
         assert "recommendationTrend" in requested_modules
-        assert len(requested_modules) == len(sp._ALL_SECTIONS)
+        assert "price" in requested_modules
+        assert len(requested_modules) == len(sp._ALL_SECTIONS) + 1
 
     def test_section_subset_only_requests_those_modules(self):
         with patch.object(
@@ -140,7 +153,29 @@ class TestStockProfileSuccess:
         assert list(payload["data"]["sections"]) == ["financials"]
 
         _, args, _ = mock_get.mock_calls[0]
-        assert args[1] == ["financialData"]
+        assert args[1] == ["financialData", "price"]
+
+    def test_secondary_listing_identity_is_separate_from_fundamentals(self):
+        summary = _sample_summary()
+        summary["price"] = {
+            "symbol": "GOOGL.BA",
+            "exchangeName": "Buenos Aires",
+            "currency": "ARS",
+            "financialCurrency": "USD",
+        }
+        with patch.object(sp, "get_quote_summary", return_value=summary):
+            payload = json.loads(
+                sp.StockProfileTool().execute(
+                    ticker="GOOGL.BA", sections=["financials"]
+                )
+            )
+        assert payload["data"]["listing"] == {
+            "symbol": "GOOGL.BA",
+            "exchange": "Buenos Aires",
+            "quote_currency": "ARS",
+            "financial_currency": "USD",
+        }
+        assert payload["data"]["sections"]["financials"]["currentPrice"] == 195.0
 
     def test_missing_module_yields_empty_shaped_section(self):
         # Yahoo can omit a module for a symbol; shaper must not crash.

@@ -225,6 +225,24 @@ def _resolve_sections(sections: Optional[List[str]]) -> List[str]:
     return resolved
 
 
+def _listing_identity(summary: Dict[str, Any]) -> Dict[str, str]:
+    """Project provider-declared listing metadata without inferring relationships."""
+    price = summary.get("price") or {}
+    if not isinstance(price, dict):
+        return {}
+    fields = {
+        "symbol": price.get("symbol"),
+        "exchange": price.get("exchangeName") or price.get("exchange"),
+        "quote_currency": price.get("currency"),
+        "financial_currency": price.get("financialCurrency"),
+    }
+    return {
+        key: str(value).strip()
+        for key, value in fields.items()
+        if value is not None and str(value).strip()
+    }
+
+
 def _market_for(ticker: str) -> str:
     """Classify a ticker into a coarse market label for the envelope."""
     upper = ticker.strip().upper()
@@ -303,6 +321,8 @@ class StockProfileTool(BaseTool):
             return self._error(str(exc))
 
         modules = [_SECTION_MODULES[name] for name in sections]
+        if "price" not in modules:
+            modules.append("price")
         try:
             summary = get_quote_summary(ticker, modules)
         except Exception as exc:  # noqa: BLE001 - surface upstream as envelope
@@ -319,7 +339,11 @@ class StockProfileTool(BaseTool):
                 "ok": True,
                 "market": _market_for(ticker),
                 "source": "yahoo",
-                "data": {"ticker": ticker, "sections": shaped},
+                "data": {
+                    "ticker": ticker,
+                    "listing": _listing_identity(summary),
+                    "sections": shaped,
+                },
             },
             ensure_ascii=False,
         )
