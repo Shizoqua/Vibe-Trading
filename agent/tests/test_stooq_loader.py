@@ -139,6 +139,7 @@ class TestFetch:
         assert list(out) == ["AAPL.US"]
 
     def test_http_error_skips_symbol(self, monkeypatch):
+        monkeypatch.setattr(stooq_loader, "_challenge_warned", False)
         monkeypatch.setattr(
             stooq_loader,
             "throttled_get",
@@ -251,6 +252,67 @@ class TestChallengePageDetection:
         assert stooq_loader._looks_like_challenge_page(self._CHALLENGE_HTML)
         assert not stooq_loader._looks_like_challenge_page(_CSV)
         assert not stooq_loader._looks_like_challenge_page("N/D\n")
+
+
+class TestDenialDetectionBeyondHtmlChallenge:
+    """403/429 and plain-text denials must engage the latch too (#1648).
+
+    Before this, raise_for_status() ran before any denial check, so a 403 or
+    429 left via the exception path before the latch was set, and every
+    remaining symbol paid another throttled request against a source that
+    could only answer the same way.
+    """
+
+    def test_403_engages_the_latch_without_raising(self, monkeypatch, caplog):
+        monkeypatch.setattr(stooq_loader, "_challenge_warned", False)
+        probed: List[str] = []
+
+        def fake_get(url, **kwargs):
+            probed.append(kwargs["params"]["s"])
+            return _FakeResponse(status_code=403, text="")
+
+        monkeypatch.setattr(stooq_loader, "throttled_get", fake_get)
+        loader = stooq_loader.DataLoader()
+
+        with caplog.at_level(logging.WARNING, logger="backtest.loaders.stooq_loader"):
+            out = loader.fetch(["AAPL.US", "MSFT.US"], "2024-01-01", "2024-01-31")
+
+        assert out == {}
+        assert probed == ["aapl.us"]  # second symbol skipped, latch already set
+        warnings = [r.message for r in caplog.records if "anti-bot challenge" in r.message]
+        assert len(warnings) == 1
+
+    def test_429_engages_the_latch_without_raising(self, monkeypatch):
+        monkeypatch.setattr(stooq_loader, "_challenge_warned", False)
+        monkeypatch.setattr(
+            stooq_loader, "throttled_get", lambda url, **kw: _FakeResponse(status_code=429, text="")
+        )
+        out = stooq_loader.DataLoader().fetch(["AAPL.US"], "2024-01-01", "2024-01-31")
+        assert out == {}
+        assert stooq_loader._challenge_warned is True
+
+    def test_plain_text_rate_limit_denial_engages_the_latch(self, monkeypatch):
+        monkeypatch.setattr(stooq_loader, "_challenge_warned", False)
+        monkeypatch.setattr(
+            stooq_loader,
+            "throttled_get",
+            lambda url, **kw: _FakeResponse(status_code=200, text="Exceeded the daily hits limit"),
+        )
+        out = stooq_loader.DataLoader().fetch(["AAPL.US"], "2024-01-01", "2024-01-31")
+        assert out == {}
+        assert stooq_loader._challenge_warned is True
+
+    def test_real_http_errors_unrelated_to_denial_still_raise(self, monkeypatch):
+        monkeypatch.setattr(stooq_loader, "_challenge_warned", False)
+        monkeypatch.setattr(
+            stooq_loader, "throttled_get", lambda url, **kw: _FakeResponse(status_code=500, text="")
+        )
+        # fetch() catches per-symbol exceptions, so a 500 still yields no data,
+        # but unlike a denial it must not set the latch — a server error says
+        # nothing about whether stooq would serve the next symbol.
+        out = stooq_loader.DataLoader().fetch(["AAPL.US"], "2024-01-01", "2024-01-31")
+        assert out == {}
+        assert stooq_loader._challenge_warned is False
 
 
 class TestChallengeWarningNamesRealOverride:

@@ -48,9 +48,24 @@ _DEFAULT_MIN_INTERVAL_S = 0.6
 _challenge_warned = False
 
 
+_DENIAL_STATUS_CODES = {403, 429}
+_DENIAL_TEXT_MARKERS = (
+    "challenge",
+    "proof of work",
+    "exceeded the daily hits limit",
+    "limit exceeded",
+)
+
+
 def _looks_like_challenge_page(body: str) -> bool:
     text = (body or "").lstrip().lower()
-    return text.startswith("<") or "challenge" in text[:2000] or "proof of work" in text[:2000]
+    if text.startswith("<"):
+        return True
+    return any(marker in text[:2000] for marker in _DENIAL_TEXT_MARKERS)
+
+
+def _looks_like_denial(status_code: int, body: str) -> bool:
+    return status_code in _DENIAL_STATUS_CODES or _looks_like_challenge_page(body)
 
 # Stooq's CSV header columns mapped to our output field names.
 _COLUMN_MAP = {
@@ -182,8 +197,13 @@ class DataLoader:
             min_interval=_min_interval(),
             params=params,
         )
-        response.raise_for_status()
-        if _looks_like_challenge_page(response.text):
+        # Checked before raise_for_status: a 403/429 denial must engage the
+        # latch too, not just a 200 challenge page. Checking only after
+        # raise_for_status let every 403/429 exit via the exception path
+        # before the latch was ever set, so each remaining symbol paid
+        # another throttled request against a source that could only answer
+        # the same way.
+        if _looks_like_denial(response.status_code, response.text):
             if not _challenge_warned:
                 logger.warning(
                     "stooq is serving an anti-bot challenge page instead of CSV "
@@ -195,6 +215,7 @@ class DataLoader:
                 )
                 _challenge_warned = True
             return None
+        response.raise_for_status()
         return _parse_csv(response.text)
 
 
