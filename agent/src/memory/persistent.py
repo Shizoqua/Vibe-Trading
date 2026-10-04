@@ -322,20 +322,25 @@ class PersistentMemory:
         return path
 
     def remove(self, name: str) -> bool:
-        """Remove a memory entry by name.
+        """Remove a memory entry by title or filename stem.
+
+        Uses the same resolution as `find()` (exact title, then filename
+        stem) so a name that successfully resolves via `find()` also
+        resolves here. The CLI's `memory forget` command already follows
+        `find()` + `remove_entry()`; this keeps the `remember` tool's
+        `forget` action (which calls `remove()` directly) consistent with
+        it instead of only matching on title.
 
         Args:
-            name: Memory name to remove.
+            name: Memory title or filename stem.
 
         Returns:
             True if found and removed.
         """
-        for entry in self._scan_entries():
-            if entry.title == name:
-                entry.path.unlink(missing_ok=True)
-                self._rebuild_index()
-                return True
-        return False
+        entry = self.find(name)
+        if entry is None:
+            return False
+        return self.remove_entry(entry)
 
     def _update_index(self, title: str, filename: str, description: str) -> None:
         """Append or update an entry in MEMORY.md."""
