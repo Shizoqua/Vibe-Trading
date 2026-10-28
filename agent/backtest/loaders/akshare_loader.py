@@ -80,9 +80,16 @@ def _is_forex(code: str) -> bool:
     # chain (mt5 → akshare) actually engages for project-style codes.
     upper = code.upper().removesuffix(".FX").replace("/", "")
     try:
-        from akshare.forex.cons import symbol_market_map
+        # AKShare >=1.2x renamed the forex package to fx and moved this map
+        # to fx.cons_forex; older releases still use forex.cons. Try both so
+        # detection survives either pinned range of the unbounded >=1.12.0
+        # dependency.
+        from akshare.fx.cons_forex import symbol_market_map
     except Exception:
-        return False
+        try:
+            from akshare.forex.cons import symbol_market_map
+        except Exception:
+            return False
     return upper in symbol_market_map
 
 
