@@ -210,6 +210,7 @@ class MatrixConfig(BaseModel):
     group_allow_from: list[str] = Field(default_factory=list)
     allow_room_mentions: bool = False
     streaming: bool = False
+    react_emoji: str = "👀"
 
 
 class MatrixChannel(BaseChannel):
@@ -217,7 +218,7 @@ class MatrixChannel(BaseChannel):
 
     name = "matrix"
     display_name = "Matrix"
-    hot_reload_noop_keys = frozenset({"allow_from"})
+    hot_reload_noop_keys = frozenset({"allow_from", "react_emoji"})
     _STREAM_EDIT_INTERVAL = 2 # min seconds between edit_message_text calls
     monotonic_time = time.monotonic
 
@@ -246,6 +247,9 @@ class MatrixChannel(BaseChannel):
         self._server_upload_limit_bytes: int | None = None
         self._server_upload_limit_checked = False
         self._stream_bufs: dict[str, _StreamBuf] = {}
+        # room_id -> the "received" reaction's own event id, so it can be
+        # redacted once the final reply for that room is sent.
+        self._pending_reactions: dict[str, str] = {}
         self._started_at_ms: int = 0
         self._media_download_semaphore = asyncio.Semaphore(
             max(1, int(self.config.max_concurrent_media_downloads))
@@ -429,6 +433,34 @@ class MatrixChannel(BaseChannel):
         response = await self.client.room_send(**kwargs)
         return response
 
+    async def _send_reaction(self, room_id: str, target_event_id: str, emoji: str) -> None:
+        """Add a best-effort emoji reaction acknowledging receipt of a message."""
+        if not self.client or not emoji:
+            return
+        content = {
+            "m.relates_to": {
+                "rel_type": "m.annotation",
+                "event_id": target_event_id,
+                "key": emoji,
+            }
+        }
+        try:
+            response = await self.client.room_send(
+                room_id=room_id, message_type="m.reaction", content=content,
+            )
+        except Exception as e:
+            self.logger.debug("reaction failed: %s", e)
+            return
+        if isinstance(response, RoomSendResponse):
+            self._pending_reactions[room_id] = response.event_id
+
+    async def _redact_reaction(self, room_id: str, reaction_event_id: str) -> None:
+        """Remove a previously added acknowledgment reaction (best-effort)."""
+        if not self.client:
+            return
+        with suppress(Exception):
+            await self.client.room_redact(room_id=room_id, event_id=reaction_event_id)
+
     async def _resolve_server_upload_limit_bytes(self) -> int | None:
         """Query homeserver upload limit once per channel lifecycle."""
         if self._server_upload_limit_checked:
@@ -539,6 +571,8 @@ class MatrixChannel(BaseChannel):
         finally:
             if not is_progress:
                 await self._stop_typing_keepalive(msg.chat_id, clear_typing=True)
+                if reaction_event_id := self._pending_reactions.pop(msg.chat_id, None):
+                    await self._redact_reaction(msg.chat_id, reaction_event_id)
 
     async def send_delta(self, chat_id: str, delta: str, metadata: dict[str, Any] | None = None) -> None:
         meta = metadata or {}
@@ -550,6 +584,8 @@ class MatrixChannel(BaseChannel):
                 return
 
             await self._stop_typing_keepalive(chat_id, clear_typing=True)
+            if reaction_event_id := self._pending_reactions.pop(chat_id, None):
+                await self._redact_reaction(chat_id, reaction_event_id)
 
             # buf.event_id can still be None here: every periodic edit above
             # is wrapped in try/except, so a transient send failure (or the
@@ -991,10 +1027,13 @@ class MatrixChannel(BaseChannel):
         ):
             return
         await self._start_typing_keepalive(room.room_id)
+        metadata = self._base_metadata(room, event)
+        if event_id := metadata.get("event_id"):
+            await self._send_reaction(room.room_id, event_id, self.config.react_emoji)
         try:
             await self._handle_message(
                 sender_id=event.sender, chat_id=room.room_id,
-                content=event.body, metadata=self._base_metadata(room, event),
+                content=event.body, metadata=metadata,
                 is_dm=self._is_direct_room(room),
             )
         except Exception:
