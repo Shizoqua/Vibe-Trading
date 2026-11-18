@@ -171,3 +171,45 @@ def test_cmd_session_chat_passes_the_session_it_was_given(
     _legacy.cmd_session_chat(session.session_id, 5)
 
     assert seen == [session.session_id]
+
+
+def test_cmd_session_chat_resumes_a_session_with_existing_history(
+    sessions_dir, monkeypatch
+) -> None:
+    """get_messages(limit=None) must return history, not crash.
+
+    cmd_session_chat fetches the full history with limit=None, which only a
+    brand-new, zero-message session (as in the test above) sails through --
+    messages[-limit:] raises TypeError('bad operand type for unary -:
+    NoneType') the moment a session actually has prior messages, i.e. on any
+    real resume.
+    """
+    from src.session.models import Message, Session
+    from src.session.store import SessionStore
+
+    store = SessionStore(base_dir=sessions_dir)
+    session = Session(title="existing-with-history")
+    store.create_session(session)
+    store.append_message(Message(session_id=session.session_id, role="user", content="hello"))
+    store.append_message(Message(session_id=session.session_id, role="assistant", content="hi there"))
+
+    seen_history: list = []
+
+    def fake_run_agent(prompt, history=None, run_dir_override=None, **kwargs):
+        seen_history.append(history)
+        return {"status": "success", "run_id": "r1", "run_dir": run_dir_override or "d"}
+
+    monkeypatch.setattr(_legacy, "_run_agent", fake_run_agent)
+    monkeypatch.setattr(_legacy, "_print_json_result", lambda result: None)
+    replies = iter(["follow up", "q"])
+    monkeypatch.setattr(_legacy, "_read_input", lambda _s: next(replies))
+    monkeypatch.setattr(_legacy, "_create_prompt_session", lambda _stats: None)
+    monkeypatch.setattr(_legacy, "_print_status_bar", lambda _stats: None)
+    monkeypatch.setattr(_legacy, "_print_result", lambda *a, **kw: None)
+
+    _legacy.cmd_session_chat(session.session_id, 5)
+
+    assert seen_history == [[
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi there"},
+    ]]
