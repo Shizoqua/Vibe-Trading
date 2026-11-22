@@ -1197,6 +1197,16 @@ class EmailChannel(BaseChannel):
             raw_name = part.get_filename() or "attachment"
             sanitized = safe_filename(raw_name) or "attachment"
             dest = media_dir / f"{uid}_{sanitized}"
+            # A single email can carry multiple attachments with the same
+            # filename (e.g. a forwarded thread, or the same file sent
+            # twice); without a collision check, each later one would
+            # silently overwrite the one saved before it.
+            if dest.exists():
+                stem, suffix = dest.stem, dest.suffix
+                counter = 1
+                while dest.exists():
+                    dest = media_dir / f"{stem}_{counter}{suffix}"
+                    counter += 1
 
             try:
                 dest.write_bytes(payload)
