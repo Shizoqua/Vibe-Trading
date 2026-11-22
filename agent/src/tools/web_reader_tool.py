@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import socket
 from urllib.parse import urlsplit
 
 import requests
@@ -45,7 +46,18 @@ def _url_allowed(url: str) -> tuple[bool, str]:
     try:
         ip = ipaddress.ip_address(ip_host)
     except ValueError:
-        return True, ""
+        # Not a canonical dotted-quad/IPv6 literal, but it may still be an
+        # IPv4 address spelled as a plain integer, in octal, or with
+        # shorthand/hex octets (e.g. 2130706433, 017700000001, 127.1,
+        # 0x7f.0.0.1 all mean 127.0.0.1) -- forms ipaddress.ip_address()
+        # rejects but socket.inet_aton() (and many HTTP clients) accept,
+        # which would otherwise let the private/loopback checks below be
+        # bypassed purely by respelling the address. A genuine hostname is
+        # rejected by inet_aton the same way it is by ipaddress.
+        try:
+            ip = ipaddress.ip_address(socket.inet_ntoa(socket.inet_aton(ip_host)))
+        except (OSError, ValueError):
+            return True, ""
 
     if (
         ip.is_private
