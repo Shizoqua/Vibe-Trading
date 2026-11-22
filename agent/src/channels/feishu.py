@@ -1581,6 +1581,15 @@ class FeishuChannel(BaseChannel):
         if data and filename:
             filename = self._safe_media_filename(filename, fallback_filename)
             file_path = media_dir / filename
+            # Two distinct messages (even from different senders) can report the
+            # same server-side filename; without this, the later download would
+            # silently overwrite the earlier one's file on disk.
+            if file_path.exists():
+                stem, suffix = file_path.stem, file_path.suffix
+                counter = 1
+                while file_path.exists():
+                    file_path = media_dir / f"{stem}_{counter}{suffix}"
+                    counter += 1
             file_path.write_bytes(data)
             path_str = str(file_path)
             self.logger.debug("Downloaded %s to %s", msg_type, path_str)
