@@ -114,3 +114,42 @@ def test_completed_event_without_usage_stays_unreported() -> None:
     )
 
     assert chunk.usage_metadata is None
+
+
+def _incomplete(reason: str) -> dict:
+    return {
+        "type": "response.incomplete",
+        "response": {
+            "status": "incomplete",
+            "incomplete_details": {"reason": reason},
+            "model": "gpt-5.5",
+            "usage": {"input_tokens": 90, "output_tokens": 40, "total_tokens": 130},
+        },
+    }
+
+
+def test_incomplete_event_reports_truncation_and_usage() -> None:
+    [text, final] = list(
+        _message_chunks_from_events(
+            [
+                {"type": "response.output_text.delta", "delta": "Revenue grew"},
+                _incomplete("max_output_tokens"),
+            ]
+        )
+    )
+    message = text + final
+
+    assert message.content == "Revenue grew"
+    assert message.response_metadata["finish_reason"] == "length"
+    assert message.response_metadata["model_name"] == "gpt-5.5"
+    assert message.usage_metadata == {
+        "input_tokens": 90,
+        "output_tokens": 40,
+        "total_tokens": 130,
+    }
+
+
+def test_incomplete_event_cut_by_content_filter_is_reported_as_such() -> None:
+    [chunk] = list(_message_chunks_from_events([_incomplete("content_filter")]))
+
+    assert chunk.response_metadata["finish_reason"] == "content_filter"

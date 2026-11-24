@@ -676,9 +676,15 @@ def _message_chunks_from_events(events: Iterable[dict[str, Any]]) -> Iterable[Co
                     arguments=_decode_tool_args(args_raw),
                 )
                 yield CodexAIMessage(tool_calls=[tool.as_langchain_tool_call()])
-        elif event_type == "response.completed":
+        elif event_type in {"response.completed", "response.incomplete"}:
+            # A response cut short (max_output_tokens, content filter) ends
+            # with response.incomplete instead of response.completed.
             response = event.get("response") or {}
             status = response.get("status")
+            if event_type == "response.incomplete":
+                status = status or "incomplete"
+                if (response.get("incomplete_details") or {}).get("reason") == "content_filter":
+                    status = "content_filter"
             response_metadata = {"finish_reason": _map_finish_reason(status)}
             model = response.get("model")
             if isinstance(model, str) and model.strip():
